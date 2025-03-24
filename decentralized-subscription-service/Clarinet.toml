@@ -1,9 +1,14 @@
 [project]
-name = "subscription-service"
+name = "decentralized-subscription-service"
 requirements = []
 costs_version = 2
+
 [contracts.subscription-service]
 path = "contracts/subscription-service.clar"
+depends_on = []
+
+[contracts.subscription-treasury]
+path = "contracts/subscription-treasury.clar"
 depends_on = []
 
 [repl.analysis]
