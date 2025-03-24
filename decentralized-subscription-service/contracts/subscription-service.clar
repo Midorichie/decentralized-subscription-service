@@ -5,32 +5,73 @@
 (define-constant SUBSCRIPTION_DURATION u43200)
 ;; Map to store active subscriptions: subscriber principal -> expiry block height
 (define-map subscriptions { subscriber: principal } { expiry: uint })
-;; Admin variable for potential future admin functions
+;; Admin variable for contract control
 (define-data-var admin principal tx-sender)
+
 ;; Public function to subscribe
 (define-public (subscribe)
   (let (
         (current-block burn-block-height)
        )
-    (if (>= (stx-get-balance tx-sender) SUBSCRIPTION_FEE)
-        (begin
-          ;; In a full implementation, you would transfer tokens to the admin or a treasury here
-          (map-set subscriptions { subscriber: tx-sender } { expiry: (+ current-block SUBSCRIPTION_DURATION) })
-          (ok "Subscription successful"))
-        (err "Insufficient STX balance"))))
+    (begin
+      ;; Check if user has enough balance
+      (asserts! (>= (stx-get-balance tx-sender) SUBSCRIPTION_FEE) (err u1))
+      ;; Transfer tokens to the contract
+      (try! (stx-transfer? SUBSCRIPTION_FEE tx-sender (as-contract tx-sender)))
+      ;; Update subscription status
+      (map-set subscriptions { subscriber: tx-sender } { expiry: (+ current-block SUBSCRIPTION_DURATION) })
+      (ok u1))))
+
 ;; Public function to cancel a subscription
 (define-public (cancel-subscription)
   (match (map-get? subscriptions { subscriber: tx-sender })
     subscription-data
       (begin
         (map-delete subscriptions { subscriber: tx-sender })
-        (ok "Subscription cancelled"))
-    (err "No active subscription")))
-;; Read-only function to check subscription status
+        (ok u1))
+    (err u0)))
+
+;; Fixed read-only function to check subscription status
 (define-read-only (check-subscription (user principal))
   (match (map-get? subscriptions { subscriber: user })
     subscription-data
-      (if (>= burn-block-height (get expiry subscription-data))
-          (err "Subscription expired")
-          (ok subscription-data))
+      (let ((expiry-block (get expiry subscription-data))
+            (current-block burn-block-height))
+        (ok {
+          active: (<= current-block expiry-block),
+          expiry: expiry-block,
+          remaining-blocks: (if (> expiry-block current-block)
+                               (- expiry-block current-block)
+                               u0)
+        }))
     (err "No subscription found")))
+
+;; Admin functions for security
+(define-public (set-admin (new-admin principal))
+  (begin
+    (asserts! (is-eq tx-sender (var-get admin)) (err u403))
+    (var-set admin new-admin)
+    (ok u1)))
+
+;; Allow admin to extend a subscription (e.g., for customer service)
+(define-public (extend-subscription (user principal) (additional-blocks uint))
+  (begin
+    (asserts! (is-eq tx-sender (var-get admin)) (err u403))
+    (match (map-get? subscriptions { subscriber: user })
+      subscription-data 
+        (begin
+          (map-set subscriptions 
+                  { subscriber: user } 
+                  { expiry: (+ (get expiry subscription-data) additional-blocks) })
+          (ok u1))
+      (err u404))))
+
+;; Allow admin to withdraw funds
+(define-public (withdraw-funds (amount uint) (recipient principal))
+  (begin
+    (asserts! (is-eq tx-sender (var-get admin)) (err u403))
+    (as-contract 
+      (begin
+        (try! (stx-transfer? amount tx-sender recipient))
+        (ok amount)
+      ))))
